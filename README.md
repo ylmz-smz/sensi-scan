@@ -62,7 +62,7 @@ npm install -g @tencent-ai/codebuddy-code
 codebuddy
 ```
 
-首次运行按官方流程完成登录。应用检测 `codebuddy` 或 `cbc` 命令，实际调用使用 `-p --output-format json` 并禁用工具；不会传入 `-y` 或 `--dangerously-skip-permissions`。
+首次运行按官方流程完成登录。应用检测 `codebuddy` 或 `cbc` 命令，实际调用使用 `-p --output-format json --json-schema -y`；同时通过 `--disallowedTools` 禁用文件读写、命令执行和网络等工具。
 
 文档：https://www.codebuddy.cn/cli/
 

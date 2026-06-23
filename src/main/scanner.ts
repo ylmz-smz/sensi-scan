@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { basename, extname, parse, relative } from 'node:path'
-import type { Finding, ProjectInfo, Severity } from './types'
+import type { CompiledSensitiveRule, Finding, ProjectInfo } from './types'
+import { compileRuleConfigs, defaultRuleConfigs } from './rules'
 
 const SOURCE_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.vue', '.java', '.kt', '.kts', '.html', '.jsp', '.xml',
@@ -10,22 +11,6 @@ const SKIP_DIRECTORIES = new Set([
   '.git', '.idea', '.vscode', 'node_modules', 'dist', 'build', 'target', 'vendor', 'coverage', '.next',
 ])
 const MAX_FILE_SIZE = 1024 * 1024
-
-interface SensitiveRule {
-  type: string
-  pattern: RegExp
-  severity: Severity
-  suggestion: string
-}
-
-const RULES: SensitiveRule[] = [
-  { type: '手机号', pattern: /\b(phone|mobile|phoneNumber|mobileNo|tel)\b/i, severity: 'medium', suggestion: '默认展示前三后四，例如 133****3333。' },
-  { type: '身份证号', pattern: /\b(idCard|identityCard|idNumber|certNo|certificateNo)\b/i, severity: 'high', suggestion: '仅保留必要的首尾字符，其余使用星号遮盖。' },
-  { type: '银行卡号', pattern: /\b(bankCard|cardNumber|bankAccount|accountNo)\b/i, severity: 'high', suggestion: '默认仅展示末四位，完整信息仅在明确授权场景提供。' },
-  { type: '邮箱', pattern: /\b(email|mailAddress)\b/i, severity: 'low', suggestion: '隐藏邮箱用户名中段，并确认页面访问权限。' },
-  { type: '地址', pattern: /\b(address|homeAddress|detailAddress|receiverAddress)\b/i, severity: 'medium', suggestion: '按业务需要隐藏门牌号或详细地址，并限制导出权限。' },
-  { type: '姓名', pattern: /\b(realName|fullName|userName|customerName)\b/i, severity: 'low', suggestion: '根据业务角色展示姓氏或部分姓名。' },
-]
 
 const SAFE_PATTERN = /(mask|masked|desensiti[sz]e|脱敏|encrypt|hideMiddle|privacy|\*{2,})/i
 const OUTPUT_PATTERN = /(return\s|logger\.|log\.|download|export(Data|File|Excel|Csv)|excel|csv|write\(|dataIndex|render\s*[:=]|value\s*=|text\s*=|\{\{|<td|<span|<p|set[A-Z]|ResponseEntity|@JsonProperty|class\s+\w*(VO|DTO|View))/i
@@ -116,7 +101,7 @@ export async function inspectProject(root: string): Promise<ProjectInfo> {
   }
 }
 
-export async function scanProject(root: string): Promise<{ project: ProjectInfo; findings: Finding[] }> {
+export async function scanProject(root: string, rules: CompiledSensitiveRule[] = compileRuleConfigs(defaultRuleConfigs)): Promise<{ project: ProjectInfo; findings: Finding[] }> {
   const files = await collectFiles(root)
   const findings: Finding[] = []
   const sources = (await Promise.all(files.map(async (path) => {
@@ -134,7 +119,7 @@ export async function scanProject(root: string): Promise<{ project: ProjectInfo;
 
     lines.forEach((line, index) => {
       if (SAFE_PATTERN.test(line) || !OUTPUT_PATTERN.test(line)) return
-      const rule = RULES.find((candidate) => candidate.pattern.test(line))
+      const rule = rules.find((candidate) => candidate.pattern.test(line))
       if (!rule) return
 
       const snippet = line.trim().slice(0, 280)
