@@ -139,6 +139,27 @@ test('跳过已经脱敏的展示', async () => {
   assert.equal(result.findings.length, 0)
 })
 
+test('AI 复核上下文包含前后十行和引用的脱敏定义', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sensi-scan-'))
+  await writeFile(join(root, 'mask.ts'), 'export const maskPhone = (value: string) => `${value.slice(0, 3)}****${value.slice(-4)}`')
+  await writeFile(join(root, 'User.tsx'), [
+    "import { maskPhone } from './mask'",
+    'export function User({ rawPhone }: { rawPhone: string }) {',
+    '  const phone = maskPhone(rawPhone)',
+    ...Array.from({ length: 12 }, (_, index) => `  const spacer${index} = ${index}`),
+    '  return <span>{phone}</span>',
+    '}',
+  ].join('\n'))
+
+  const result = await scanProject(root)
+  const finding = result.findings.find((item) => item.snippet.includes('{phone}'))
+
+  assert.ok(finding?.context)
+  assert.match(finding.context, /return <span>\{phone\}<\/span>/)
+  assert.match(finding.context, /const phone = maskPhone\(rawPhone\)/)
+  assert.match(finding.context, /export const maskPhone/)
+})
+
 test('从路由配置补充页面路由', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sensi-scan-'))
   await mkdir(join(root, 'src'))

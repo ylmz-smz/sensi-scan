@@ -49,6 +49,7 @@ export interface Finding {
   file: string
   line: number
   snippet: string
+  context?: string
   route: string
   api: string
   suggestion: string

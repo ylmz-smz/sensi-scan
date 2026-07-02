@@ -282,7 +282,7 @@ export async function getProviderStatuses(): Promise<ProviderStatus[]> {
 
 function createPrompt(findings: Finding[]): string {
   return `你是敏感信息展示审查员。请只复核下面由本地规则发现的候选问题，不要修改文件、不要执行命令、不要访问网络。
-判断每项是否确实存在未脱敏展示风险。仅返回 JSON，不要包含 Markdown。格式：
+结合每项的命中代码、前后文和引用定义，判断是否确实存在未脱敏展示风险。上下文没有覆盖完整数据流时必须使用 suspected。仅返回 JSON，不要包含 Markdown。格式：
 {"findings":[{"id":"原始ID","status":"confirmed|suspected|safe","reason":"简短中文理由","route":"有证据的页面路由或待确认"}]}
 无法确认页面权限、完整数据流或页面路由时必须使用 suspected，不要编造路由。
 不要输出解释、前缀、后缀或代码块；最终内容必须只包含上述 JSON 对象。

@@ -11,11 +11,74 @@ const SKIP_DIRECTORIES = new Set([
   '.git', '.idea', '.vscode', 'node_modules', 'dist', 'build', 'target', 'vendor', 'coverage', '.next',
 ])
 const MAX_FILE_SIZE = 1024 * 1024
+const CONTEXT_RADIUS = 10
+const DEFINITION_RADIUS = 5
+const MAX_CONTEXT_LINES = 120
+const MAX_DEFINITIONS = 8
 
 const SAFE_PATTERN = /(mask|masked|desensiti[sz]e|脱敏|encrypt|hideMiddle|privacy|\*{2,})/i
 const OUTPUT_PATTERN = /(return\s|logger\.|log\.|download|export(Data|File|Excel|Csv)|excel|csv|write\(|dataIndex|render\s*[:=]|value\s*=|text\s*=|\{\{|<td|<span|<p|set[A-Z]|ResponseEntity|@JsonProperty|class\s+\w*(VO|DTO|View))/i
 const API_PATTERN = /@(RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping)\s*\(\s*(?:value\s*=\s*)?["']([^"']+)/
 const ROUTE_PATTERN = /(?:path\s*:\s*|<Route[^>]+path\s*=\s*)["']([^"']+)/
+const IGNORED_IDENTIFIERS = new Set([
+  'class', 'const', 'else', 'export', 'false', 'function', 'import', 'interface', 'null', 'return',
+  'span', 'true', 'type', 'undefined', 'var', 'let',
+])
+
+interface SourceFile {
+  path: string
+  source: string
+}
+
+function identifiers(source: string): string[] {
+  return [...new Set(source.match(/[A-Za-z_$][\w$]*/g) ?? [])]
+    .filter((name) => name.length > 2 && !IGNORED_IDENTIFIERS.has(name))
+}
+
+function contextBlock(root: string, file: SourceFile, lines: string[], start: number, end: number): string {
+  const path = relative(root, file.path)
+  return `${path}:${start + 1}-${end + 1}\n${lines.slice(start, end + 1).map((line, index) => `${start + index + 1}: ${line}`).join('\n')}`
+}
+
+function reviewContext(root: string, files: SourceFile[], currentFile: SourceFile, lineIndex: number): string {
+  const blocks: string[] = []
+  const seenRanges = new Set<string>()
+  const queuedNames = identifiers(currentFile.source.split(/\r?\n/)[lineIndex])
+  const seenNames = new Set<string>()
+  let lineCount = 0
+
+  function addBlock(file: SourceFile, lines: string[], start: number, end: number): void {
+    const key = `${file.path}:${start}:${end}`
+    const count = end - start + 1
+    if (seenRanges.has(key) || lineCount + count > MAX_CONTEXT_LINES) return
+    seenRanges.add(key)
+    lineCount += count
+    const block = contextBlock(root, file, lines, start, end)
+    blocks.push(block)
+    queuedNames.push(...identifiers(lines.slice(start, end + 1).join('\n')))
+  }
+
+  const currentLines = currentFile.source.split(/\r?\n/)
+  addBlock(currentFile, currentLines, Math.max(0, lineIndex - CONTEXT_RADIUS), Math.min(currentLines.length - 1, lineIndex + CONTEXT_RADIUS))
+
+  let definitions = 0
+  while (queuedNames.length > 0 && definitions < MAX_DEFINITIONS) {
+    const name = queuedNames.shift()!
+    if (seenNames.has(name)) continue
+    seenNames.add(name)
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const definition = new RegExp(`\\b(?:function|class|interface|type|const|let|var)\\s+${escaped}\\b|\\b${escaped}\\s*[:=]`)
+    for (const file of files) {
+      const lines = file.source.split(/\r?\n/)
+      const index = lines.findIndex((line) => definition.test(line))
+      if (index < 0 || (file.path === currentFile.path && Math.abs(index - lineIndex) <= CONTEXT_RADIUS)) continue
+      addBlock(file, lines, Math.max(0, index - DEFINITION_RADIUS), Math.min(lines.length - 1, index + DEFINITION_RADIUS))
+      definitions += 1
+      break
+    }
+  }
+  return blocks.join('\n\n')
+}
 
 async function collectFiles(root: string): Promise<string[]> {
   const files: string[] = []
@@ -104,7 +167,7 @@ export async function inspectProject(root: string): Promise<ProjectInfo> {
 export async function scanProject(root: string, rules: CompiledSensitiveRule[] = compileRuleConfigs(defaultRuleConfigs)): Promise<{ project: ProjectInfo; findings: Finding[] }> {
   const files = await collectFiles(root)
   const findings: Finding[] = []
-  const sources = (await Promise.all(files.map(async (path) => {
+  const sources: SourceFile[] = (await Promise.all(files.map(async (path) => {
     try {
       return { path, source: await readFile(path, 'utf8') }
     } catch {
@@ -135,6 +198,7 @@ export async function scanProject(root: string, rules: CompiledSensitiveRule[] =
         file,
         line: index + 1,
         snippet,
+        context: reviewContext(root, sources, { path: absoluteFile, source }, index),
         route: localRoute === '待确认' ? routes.get(parse(file).name) ?? localRoute : localRoute,
         api: nearbyPath(lines, index, API_PATTERN),
         suggestion: rule.suggestion,
